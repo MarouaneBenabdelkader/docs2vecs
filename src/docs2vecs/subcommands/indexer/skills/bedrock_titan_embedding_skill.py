@@ -3,7 +3,15 @@ import time
 from typing import List, Optional
 
 import boto3
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import (
+    BotoCoreError,
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ProxyConnectionError,
+    ReadTimeoutError,
+)
 
 from docs2vecs.subcommands.indexer.config.config import Config
 from docs2vecs.subcommands.indexer.document.document import Document
@@ -20,6 +28,18 @@ _RETRYABLE_BEDROCK_CODES = frozenset({
     "ModelTimeoutException",
     "ModelStreamErrorException",
 })
+
+# Transport-level botocore errors worth retrying. Other BotoCoreError
+# subclasses (NoCredentialsError, ParamValidationError, NoRegionError,
+# SSLError, ProfileNotFound, etc.) indicate config/programmer mistakes
+# that won't fix themselves on retry — they surface immediately.
+_TRANSIENT_BOTOCORE_ERRORS = (
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    ProxyConnectionError,
+    ReadTimeoutError,
+)
 
 
 class BedrockTitanEmbeddingSkill(IndexerSkill):
@@ -45,8 +65,7 @@ class BedrockTitanEmbeddingSkill(IndexerSkill):
             code = exc.response.get("Error", {}).get("Code", "")
             status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
             return code in _RETRYABLE_BEDROCK_CODES or 500 <= status < 600
-        # BotoCoreError covers connection/read timeouts and other transport-level issues
-        return isinstance(exc, BotoCoreError)
+        return isinstance(exc, _TRANSIENT_BOTOCORE_ERRORS)
 
     def _embed_text(self, content: str, chunk_id=None):
         self.logger.debug(
